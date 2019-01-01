@@ -14,7 +14,7 @@ WAVE reader, supports 8-to-16-bit mono and stereo PCM data
  (the filename can also be file open for binary read)
 
  w acts more or less like a read-only array object;
- its shape is (nn,) for mono, or (nn,2) for stero.
+ its shape is (nn,) for mono, or (nn,2) for stereo.
  you can test its length, and read slices. Strides,
  and use of the second index for stereo wav, are
  not supported.
@@ -35,9 +35,10 @@ WAVE reader, supports 8-to-16-bit mono and stereo PCM data
 __all__ = ['RiffReader', 'WaveFileReader', 'WaveFileWriter']
 
 
+Need_byte_swap = (sys.byteorder != 'little')
 
 class RiffReader(object):
-    "base file for RIFF reader"
+    "base class for RIFF reader"
     __slots__ = ['f', 'file_length', 'RIFFtype',
         'chunklist' # list of ('chkid', posn, length)
         ]
@@ -59,8 +60,8 @@ class RiffReader(object):
         self.RIFFtype = s2
         exp_RIFFtype = self.expected_RIFFtype
 
-        if exp_RIFFtype is not None and \
-           exp_RIFFtype != s2:
+        if (exp_RIFFtype is not None and
+           exp_RIFFtype != s2):
             raise ValueError, "expecting RIFF type %r, got %r" %(
                 exp_RIFFtype, s2 )
 
@@ -220,18 +221,22 @@ def dec_16_mono(s):
 def dec_16_stereo(s):
     return np.array(struct.unpack('<2h', s ), 'int16')
 
-def dec_16_mono_arr(s,n):
-    a = np.fromstring(s,np.int16)
-    if sys.byteorder != 'little':
-        a = a.byteswapped()
-    return a
+if Need_byte_swap:
+    def dec_16_mono_arr(s,n):
+        return np.fromstring(s,np.int16).byteswapped()
 
-def dec_16_stereo_arr(s,n):
-    a = np.fromstring(s,np.int16)
-    if sys.byteorder != 'little':
-        a = a.byteswapped()
-    a.shape = (n,2)
-    return a
+    def dec_16_stereo_arr(s,n):
+        a = np.fromstring(s,np.int16).byteswapped()
+        a.shape = (n,2)
+        return a
+else:
+    def dec_16_mono_arr(s,n):
+        return np.fromstring(s,np.int16)
+
+    def dec_16_stereo_arr(s,n):
+        a = np.fromstring(s,np.int16)
+        a.shape = (n,2)
+        return a
 
 
 ##########################################################
@@ -417,7 +422,7 @@ class WaveFileWriter(object):
         if self.bits_per_samp == 8:
             val = (((val+128)>>8)+128).astype(np.uint8)
         else:
-            if sys.byteorder != 'little':
+            if Need_byte_swap:
                 val = val.byteswapped()
         #
         val = val.tostring() # is a buffer now
