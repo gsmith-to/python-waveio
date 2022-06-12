@@ -6,6 +6,9 @@ import struct
 import numpy as np
 import sys
 
+class WaveIoError(ValueError):
+    pass
+
 """
 WAVE reader, supports 8-to-16-bit mono and stereo PCM data
 
@@ -62,12 +65,12 @@ class RiffReader(object):
 
         if (exp_RIFFtype is not None and
            exp_RIFFtype != s2):
-            raise ValueError, "expecting RIFF type %r, got %r" %(
-                exp_RIFFtype, s2 )
+            raise WaveIoError("expecting RIFF type %r, got %r" %(
+                exp_RIFFtype, s2))
 
         self.file_length= length
-        if s1 != 'RIFF':
-            raise ValueError, "RIFF header not found"
+        if s1 != b'RIFF':
+            raise WaveIoError("RIFF header not found")
 
         chunklist = []
         pos = 12
@@ -75,7 +78,7 @@ class RiffReader(object):
         while nextpos < length:
             if nextpos != pos:
                 if nextpos < pos:
-                    raise ValueError, "bad chunk length"
+                    raise WaveIoError("bad chunk length")
                 f.seek(nextpos)
                 pos = nextpos
             chkhdr = f.read(8)
@@ -89,7 +92,7 @@ class RiffReader(object):
         for p in self.chunklist:
             if p[0] == chktype:
                 return p
-        raise ValueError, "chunk type %r not found" % chktype
+        raise WaveIoError("chunk type %r not found" % (chktype,))
 
     def get_chunk_data(self, chktype):
         p = self.find_chunk_data(chktype)
@@ -113,18 +116,18 @@ class WaveFileReader(RiffReader):
          'shape'
          ]
 
-    expected_RIFFtype = 'WAVE'
+    expected_RIFFtype = b'WAVE'
 
     def __init__(self, *parms, **kw):
         RiffReader.__init__(self, *parms, **kw)
-        dat = self.get_chunk_data('fmt ')
+        dat = self.get_chunk_data(b'fmt ')
         if len(dat)==16:
-            dat += '\0\0'
+            dat += b'\0\0'
         (comp_code, nchans, samp_rate, byte_per_sec,
             blk_align, bits_per_samp, extra_bytes) = struct.unpack('<HHLL3H', dat[:18])
         self.nchans = nchans
         if comp_code != 1 or nchans not in (1,2) or not ( 8 <= bits_per_samp <= 16):
-            raise ValueError, "unsupported RIFF format"
+            raise WaveIoError("unsupported RIFF format")
         bytes_per_frame = nchans*( 1 + (bits_per_samp>8) )
         self.bytes_per_frame = bytes_per_frame
         self.bits_per_samp = bits_per_samp
@@ -133,7 +136,7 @@ class WaveFileReader(RiffReader):
         #
         # find data
         #
-        tmp, datapos, databytes = self.find_chunk_data( 'data')
+        tmp, datapos, databytes = self.find_chunk_data(b'data')
         self.datapos = datapos
         self.databytes = databytes
         self.sample_count = int(databytes//bytes_per_frame)
@@ -175,7 +178,7 @@ class WaveFileReader(RiffReader):
         if type(slc) is slice:
             start,stop,stride = slc.indices(self.sample_count)
             if stride != 1:
-                raise ValueError, "stride must be 1"
+                raise WaveIoError("stride must be 1")
             recs = max(0,stop-start)
             if recs:
                 f.seek( self.datapos + nf*start)
@@ -185,7 +188,7 @@ class WaveFileReader(RiffReader):
             return self.arr_decoder( d,recs)
 
         else:   # must be an integer
-            i = int(slc)
+            i = slc.__index__()  # fails if e.g. slice is a float
             if i < 0:
                 i += n
             if not 0 <= i < n:
@@ -204,7 +207,7 @@ class WaveFileReader(RiffReader):
 def dec_8_mono(s):
     return (ord(s)-128)*256
 def dec_8_stereo(s):
-    r = map(ord,s)
+    r = (ord(x) for x in s)
     return np.array( ((r[0]-128)*256, (r[1]-128)*256), 'int16')
 
 def dec_8_mono_arr(s,n):
@@ -313,20 +316,20 @@ class WaveFileWriter(object):
             sample_rate = 44100
         if len(kw):
             kw = kw.copy()
-            if kw.has_key( 'bits_per_samp'):
+            if 'bits_per_samp' in kw:
                 bits_per_samp = kw.pop('bits_per_samp')
-            if kw.has_key( 'nchans'):
+            if 'nchans' in kw:
                 nchans = kw.pop('nchans')
-            if kw.has_key( 'sample_rate'):
+            if 'sample_rate' in kw:
                 sample_rate = kw.pop('sample_rate')
             if len(kw):
-                raise ValueError, "unknown paramaters: " + ' '.join(kw.keys())
+                raise WaveIoError("unknown paramaters: " + ' '.join(kw.keys()))
         self.bits_per_samp = bits_per_samp
         self.nchans = nchans
         self.sample_rate = sample_rate
 
         if nchans not in (1,2) or not ( 8<= bits_per_samp <= 16):
-            raise ValueError, "bad nchans or bits_per_samp"
+            raise WaveIoError("bad nchans or bits_per_samp")
         bpf = nchans
         if bits_per_samp > 8:
             bpf *= 2
@@ -340,13 +343,13 @@ class WaveFileWriter(object):
         #
         # start writing
         #
-        f.write('RIFFxxxxWAVEfmt ')
+        f.write(b'RIFFxxxxWAVEfmt ')
         p = 16
         d = struct.pack('<LhhLLhh', 16, 1, nchans,
             sample_rate, sample_rate * bpf, bpf, bits_per_samp)
         f.write(d)
         p += len(d)
-        d = 'fact\x04\0\0\0xxxxdataxxxx'
+        d = b'fact\x04\0\0\0xxxxdataxxxx'
         f.write(d)
         p += len(d)
         self.datapos = p
@@ -356,13 +359,13 @@ class WaveFileWriter(object):
         #
 
     def close(self):
-        if self.f is None:
+        if getattr(self,'f',None) is None:
             return
         n = self.curindex
         p = self.datapos
 
         dlen = self.bytes_per_frame * n
-        d2 = struct.pack('<L4sL', n, 'data', dlen )
+        d2 = struct.pack('<L4sL', n, b'data', dlen )
         d1 = struct.pack('<L', dlen + p-8)
         self.f.seek(4)
         self.f.write(d1)
@@ -378,27 +381,30 @@ class WaveFileWriter(object):
         is_slc = type(slc) is slice
         if is_slc:
             if slc.step is not None and slc.step != 1:
-                raise IndexError, "slice step must be 1"
+                raise IndexError("slice step must be 1")
             start = slc.start
             stop = slc.stop
             if start is None: start = 0
-        elif type(slc) in (int, long):
-            start = slc
-            stop = slc+1
-            val = [ val ]
         else:
-            raise IndexError, "bad index"
+            idx_method = getattr(slc,'__index__',None)
+            if idx_method is not None:
+                start = idx_method()
+                start = slc
+                stop = slc+1
+                val = [ val ]
+            else:
+                raise IndexError("bad index")
         if start < 0 or ( stop is not None and ( stop < start )):
-            raise IndexError, "invalid slice parameters"
+            raise IndexError("invalid slice parameters")
 
         if stop is None:
             stop = start + len(val)
         else:
             if len(val)+start != stop:
-                raise ValueError, "size mismatch in slice assignment"
+                raise WaveIoError("size mismatch in slice assignment")
 
         if self.curindex != start:
-            raise ValueError, "WaveFileWriter assignments must be in seq"
+            raise WaveIoError("WaveFileWriter assignments must be in sequence")
         self.curindex = stop
 
         #
@@ -414,8 +420,8 @@ class WaveFileWriter(object):
         if self.nchans == 2:
             shp = shp + (2,)
         if val.shape != shp:
-            raise ValueError, "assigning array shape %s to slice of shape %s"%(
-                val.shape, shp)
+            raise WaveIoError("assigning array shape %s to slice of shape %s"%(
+                val.shape, shp))
         #
         # convert to string
         #

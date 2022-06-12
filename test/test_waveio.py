@@ -118,7 +118,7 @@ def MakeFreqSweep( fname,
  
     CHUNK = 65535
     ipos = 0
-    # (don't even try to to this in single-precision floats...)
+    # (don't even try to do this in single-precision floats...)
     while ipos < nsamps:
         nsampnow = min(CHUNK, nsamps-ipos)
         t = np.arange( ipos,ipos+nsampnow)* (B/fsamp)
